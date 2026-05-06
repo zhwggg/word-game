@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>初一单词飞机大战</title>
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: "Microsoft YaHei", sans-serif;
+}
+body {
+  background-color: #0a0a1a;
+  color: #fff;
+  text-align: center;
+  padding: 15px 0;
+}
+#mainUI {
+  max-width: 400px;
+  margin: 0 auto;
+  padding: 20px 15px;
+  background-color: #151535;
+  border-radius: 12px;
+}
+.title {
+  font-size: 20px;
+  margin-bottom: 15px;
+  color: #00ccff;
+}
+.hud-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: #cce0ff;
+  margin-bottom: 10px;
+}
+.word-box {
+  font-size: 26px;
+  margin: 20px 0;
+  font-weight: bold;
+}
+#wordInput {
+  width: 85%;
+  padding: 12px 15px;
+  font-size: 18px;
+  text-align: center;
+  border: none;
+  border-radius: 8px;
+  outline: none;
+}
+.btn-group {
+  margin: 20px 0;
+}
+.btn {
+  padding: 12px 25px;
+  margin: 0 8px;
+  background-color: #0088ff;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+}
+.btn:disabled {
+  background-color: #555577;
+  cursor: not-allowed;
+}
+.audio-btn {
+  padding: 8px 15px;
+  margin: 10px 0;
+  background-color: #22aa22;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.audio-btn.off {
+  background-color: #aa2222;
+}
+.tip {
+  color: #ffdd44;
+  margin: 10px 0;
+  font-size: 15px;
+}
+.score {
+  font-size: 15px;
+  margin: 8px 0;
+}
+#gameCanvas {
+  display: none;
+  margin: 10px auto;
+  background-color: #000;
+  touch-action: none;
+  border: 2px solid #0088ff;
+  border-radius: 8px;
+}
+</style>
+</head>
+<body>
+<div id="mainUI">
+  <div class="title">初一单词闯关·飞机大战</div>
+  <button class="audio-btn" id="audioBtn" onclick="toggleAudio()">🔊 音效：已开启</button>
+  <div class="hud-row">
+    <span>关卡：<span id="levelNum">1</span>/10</span>
+    <span>本关正确：<span id="correctNum">0</span>/5</span>
+    <span>当前进度：<span id="wordIndex">0</span>/5</span>
+  </div>
+  <div class="word-box">中文：<span id="chineseText"></span></div>
+  <input type="text" id="wordInput" placeholder="请输入对应的英文单词" autocomplete="off">
+  <div class="btn-group">
+    <button class="btn" onclick="submitWord()">提交答案</button>
+    <button class="btn" id="startGameBtn" disabled onclick="startGame()">开始游戏</button>
+  </div>
+  <div class="tip" id="tipText">第1关，请拼写单词，答对≥4个解锁游戏</div>
+  <div class="score">单词总分：<span id="wordScore">0</span> &nbsp; 本局累计击落：<span id="totalRoundKill">0</span> 架</div>
+  <div class="score">历史最高击落：<span id="bestKill">0</span> 架</div>
+</div>
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<script>
+const $ = (id) => document.getElementById(id);
+
+let isAudioOn = true;
+let audioContext;
+
+function initAudio() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioContext.state === "suspended") {
+    audioContext.resume();
+  }
+}
+
+function playCorrectSound() {
+  if (!isAudioOn || !audioContext) return;
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc.frequency.setValueAtTime(440, audioContext.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(880, audioContext.currentTime + 0.1);
+  gain.gain.setValueAtTime(0.3, audioContext.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+  
+  osc.start(audioContext.currentTime);
+  osc.stop(audioContext.currentTime + 0.3);
+}
+
+function playShootSound() {
+  if (!isAudioOn || !audioContext) return;
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(800, audioContext.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(200, audioContext.currentTime + 0.1);
+  gain.gain.setValueAtTime(0.2, audioContext.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+  
+  osc.start(audioContext.currentTime);
+  osc.stop(audioContext.currentTime + 0.1);
+}
+
+function playBoomSound() {
+  if (!isAudioOn || !audioContext) return;
+  const bufferSize = audioContext.sampleRate * 0.3;
+  const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+  const data = buffer.getChannelData(0);
+  
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+  }
+  
+  const source = audioContext.createBufferSource();
+  const gain = audioContext.createGain();
+  source.buffer = buffer;
+  source.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  gain.gain.setValueAtTime(0.4, audioContext.currentTime);
+  source.start(audioContext.currentTime);
+}
+
+function playOverSound() {
+  if (!isAudioOn || !audioContext) return;
+  const osc = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  osc.connect(gain);
+  gain.connect(audioContext.destination);
+  
+  osc.frequency.setValueAtTime(440, audioContext.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(110, audioContext.currentTime + 0.5);
+  gain.gain.setValueAtTime(0.3, audioContext.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+  
+  osc.start(audioContext.currentTime);
+  osc.stop(audioContext.currentTime + 0.5);
+}
+
+function toggleAudio() {
+  initAudio();
+  isAudioOn = !isAudioOn;
+  localStorage.setItem("audioOn", isAudioOn);
+  const btn = $("audioBtn");
+  if (isAudioOn) {
+    btn.textContent = "🔊 音效：已开启";
+    btn.classList.remove("off");
+    setTimeout(() => playCorrectSound(), 50);
+  } else {
+    btn.textContent = "🔇 音效：已关闭";
+    btn.classList.add("off");
+  }
+}
+
+const fullJunior1WordList = [
+  { c: "我", e: "I" }, { c: "你", e: "you" }, { c: "他", e: "he" }, { c: "她", e: "she" }, { c: "它", e: "it" },
+  { c: "这个", e: "this" }, { c: "那个", e: "that" }, { c: "什么", e: "what" }, { c: "哪里", e: "where" }, { c: "谁", e: "who" },
+  { c: "好的", e: "good" }, { c: "坏的", e: "bad" }, { c: "大的", e: "big" }, { c: "小的", e: "small" }, { c: "高的", e: "tall" },
+  { c: "看", e: "look" }, { c: "说", e: "say" }, { c: "听", e: "hear" }, { c: "走", e: "go" }, { c: "来", e: "come" },
+  { c: "苹果", e: "apple" }, { c: "香蕉", e: "banana" }, { c: "橙子", e: "orange" }, { c: "梨", e: "pear" }, { c: "葡萄", e: "grape" },
+  { c: "书", e: "book" }, { c: "笔", e: "pen" }, { c: "尺子", e: "ruler" }, { c: "书包", e: "schoolbag" }, { c: "橡皮", e: "eraser" },
+  { c: "红色", e: "red" }, { c: "蓝色", e: "blue" }, { c: "黄色", e: "yellow" }, { c: "绿色", e: "green" }, { c: "黑色", e: "black" },
+  { c: "早上", e: "morning" }, { c: "下午", e: "afternoon" }, { c: "晚上", e: "evening" }, { c: "今天", e: "today" }, { c: "明天", e: "tomorrow" },
+  { c: "爸爸", e: "father" }, { c: "妈妈", e: "mother" }, { c: "兄弟", e: "brother" }, { c: "姐妹", e: "sister" }, { c: "朋友", e: "friend" },
+  { c: "猫", e: "cat" }, { c: "狗", e: "dog" }, { c: "鸟", e: "bird" }, { c: "鱼", e: "fish" }, { c: "熊猫", e: "panda" },
+  { c: "我们", e: "we" }, { c: "他们", e: "they" }, { c: "我的", e: "my" }, { c: "你的", e: "your" }, { c: "他的", e: "his" },
+  { c: "她的", e: "her" }, { c: "它的", e: "its" }, { c: "是", e: "is" }, { c: "是", e: "am" }, { c: "是", e: "are" },
+  { c: "不", e: "no" }, { c: "不是", e: "not" }, { c: "和", e: "and" }, { c: "或者", e: "or" }, { c: "在...里", e: "in" },
+  { c: "在...上", e: "on" }, { c: "在...下面", e: "under" }, { c: "一", e: "one" }, { c: "二", e: "two" }, { c: "三", e: "three" },
+  { c: "四", e: "four" }, { c: "五", e: "five" }, { c: "六", e: "six" }, { c: "七", e: "seven" }, { c: "八", e: "eight" },
+  { c: "九", e: "nine" }, { c: "十", e: "ten" }, { c: "名字", e: "name" }, { c: "年龄", e: "age" }, { c: "班级", e: "class" },
+  { c: "年级", e: "grade" }, { c: "学校", e: "school" }, { c: "老师", e: "teacher" }, { c: "学生", e: "student" }, { c: "家庭", e: "family" },
+  { c: "家", e: "home" }, { c: "房间", e: "room" }, { c: "门", e: "door" }, { c: "窗户", e: "window" }, { c: "桌子", e: "desk" },
+  { c: "椅子", e: "chair" }, { c: "床", e: "bed" }, { c: "水", e: "water" }, { c: "牛奶", e: "milk" }, { c: "果汁", e: "juice" },
+  { c: "米饭", e: "rice" }, { c: "面包", e: "bread" }, { c: "鸡蛋", e: "egg" }, { c: "蛋糕", e: "cake" }, { c: "鸡肉", e: "chicken" },
+  { c: "喜欢", e: "like" }, { c: "爱", e: "love" }, { c: "想要", e: "want" }, { c: "有", e: "have" }, { c: "吃", e: "eat" },
+  { c: "喝", e: "drink" }, { c: "跑", e: "run" }, { c: "跳", e: "jump" }, { c: "玩", e: "play" }, { c: "读", e: "read" },
+  { c: "写", e: "write" }, { c: "画", e: "draw" }, { c: "唱", e: "sing" }, { c: "跳舞", e: "dance" }, { c: "游泳", e: "swim" },
+  { c: "快乐", e: "happy" }, { c: "伤心", e: "sad" }, { c: "生气", e: "angry" }, { c: "累的", e: "tired" }, { c: "开心的", e: "glad" },
+  { c: "新的", e: "new" }, { c: "旧的", e: "old" }, { c: "长的", e: "long" }, { c: "短的", e: "short" }, { c: "胖的", e: "fat" },
+  { c: "瘦的", e: "thin" }, { c: "冷的", e: "cold" }, { c: "热的", e: "hot" }, { c: "温暖的", e: "warm" }, { c: "凉爽的", e: "cool" },
+  { c: "白色", e: "white" }, { c: "紫色", e: "purple" }, { c: "粉色", e: "pink" }, { c: "棕色", e: "brown" }, { c: "灰色", e: "grey" },
+  { c: "时间", e: "time" }, { c: "天", e: "day" }, { c: "周", e: "week" }, { c: "月", e: "month" }, { c: "年", e: "year" },
+  { c: "周一", e: "Monday" }, { c: "周二", e: "Tuesday" }, { c: "周三", e: "Wednesday" }, { c: "周四", e: "Thursday" }, { c: "周五", e: "Friday" },
+  { c: "周六", e: "Saturday" }, { c: "周日", e: "Sunday" }, { c: "春天", e: "spring" }, { c: "夏天", e: "summer" }, { c: "秋天", e: "autumn" },
+  { c: "冬天", e: "winter" }, { c: "太阳", e: "sun" }, { c: "月亮", e: "moon" }, { c: "星星", e: "star" }, { c: "云", e: "cloud" },
+  { c: "雨", e: "rain" }, { c: "雪", e: "snow" }, { c: "风", e: "wind" }, { c: "手", e: "hand" }, { c: "脚", e: "foot" },
+  { c: "头", e: "head" }, { c: "眼睛", e: "eye" }, { c: "耳朵", e: "ear" }, { c: "鼻子", e: "nose" }, { c: "嘴", e: "mouth" },
+  { c: "脸", e: "face" }, { c: "头发", e: "hair" }, { c: "身体", e: "body" }, { c: "男孩", e: "boy" }, { c: "女孩", e: "girl" },
+  { c: "男人", e: "man" }, { c: "女人", e: "woman" }, { c: "先生", e: "Mr" }, { c: "女士", e: "Ms" }, { c: "小姐", e: "Miss" },
+  { c: "你好", e: "hello" }, { c: "嗨", e: "hi" }, { c: "再见", e: "goodbye" }, { c: "谢谢", e: "thank" }, { c: "感谢", e: "thanks" },
+  { c: "对不起", e: "sorry" }, { c: "请", e: "please" }, { c: "好的", e: "ok" }, { c: "对的", e: "right" }, { c: "错的", e: "wrong" },
+  { c: "可以", e: "can" }, { c: "会", e: "will" }, { c: "必须", e: "must" }, { c: "非常", e: "very" }, { c: "太", e: "too" },
+  { c: "也", e: "too" }, { c: "都", e: "all" }, { c: "每一个", e: "every" }, { c: "一些", e: "some" }, { c: "很多", e: "many" },
+  { c: "少的", e: "little" }, { c: "这里", e: "here" }, { c: "那里", e: "there" }, { c: "为什么", e: "why" }, { c: "怎样", e: "how" }
+];
+
+let currentLevel = 1;
+let totalWordScore = 0;
+let currentLevelWords = [];
+let currentWordIndex = 0;
+let currentLevelCorrect = 0;
+let gameAllWords = [];
+let errorWords = [];
+let isReviewMode = false;
+let isBossMode = false;
+let totalRoundKill = 0;
+let usedWordKeys = [];
+let alreadyScoredLevels = [];
+
+function shuffleArray(array) {
+  const newArr = [...array];
+  for (let i = newArr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [newArr[i], newArr[j]] = [newArr[j], newArr[i]];
+  }
+  return newArr;
+}
+
+function initGameRound() {
+  currentLevel = 1;
+  totalWordScore = 0;
+  totalRoundKill = 0;
+  errorWords = [];
+  isReviewMode = false;
+  isBossMode = false;
+  alreadyScoredLevels = [];
+
+  let availableWords = fullJunior1WordList.filter(word => !usedWordKeys.includes(word.e));
+  if (availableWords.length < 50) {
+    availableWords = [...fullJunior1WordList];
+    usedWordKeys = [];
+  }
+  gameAllWords = shuffleArray(availableWords).slice(0, 50);
+  gameAllWords.forEach(word => usedWordKeys.push(word.e));
+
+  loadLevelWords();
+  updateUI();
+}
+
+function loadLevelWords() {
+  const startIndex = (currentLevel - 1) * 5;
+  currentLevelWords = gameAllWords.slice(startIndex, startIndex + 5);
+  currentWordIndex = 0;
+  currentLevelCorrect = 0;
+  $("startGameBtn").disabled = true;
+  showCurrentWord();
+  $("tipText").textContent = `第${currentLevel}关，请拼写单词，答对≥4个解锁游戏`;
+  updateUI();
+}
+
+function loadReviewWords() {
+  isReviewMode = true;
+  currentLevelWords = [...errorWords];
+  currentWordIndex = 0;
+  currentLevelCorrect = 0;
+  $("startGameBtn").disabled = true;
+  showCurrentWord();
+  $("tipText").textContent = `错词重练：共${currentLevelWords.length}个单词，需全部拼写正确`;
+  updateUI();
+}
+
+function showCurrentWord() {
+  $("chineseText").textContent = currentLevelWords[currentWordIndex].c;
+  $("wordInput").value = "";
+  $("wordInput").focus();
+  updateUI();
+}
+
+function updateUI() {
+  $("levelNum").textContent = currentLevel;
+  $("correctNum").textContent = currentLevelCorrect;
+  $("wordIndex").textContent = currentWordIndex;
+  $("wordScore").textContent = totalWordScore;
+  $("totalRoundKill").textContent = totalRoundKill;
+}
+
+function submitWord() {
+  initAudio();
+  const userInput = $("wordInput").value.trim().toLowerCase();
+  const correctAnswer = currentLevelWords[currentWordIndex].e.toLowerCase();
+  const currentWord = currentLevelWords[currentWordIndex];
+  const isLastWord = (currentWordIndex === currentLevelWords.length - 1);
+
+  if (userInput === correctAnswer) {
+    currentLevelCorrect++;
+    playCorrectSound();
+    $("tipText").textContent = "✅ 拼写正确！";
+    errorWords = errorWords.filter(word => word.e !== currentWord.e);
+  } else {
+    $("tipText").textContent = `❌ 拼写错误，正确答案：${correctAnswer}`;
+    if (!isReviewMode && !errorWords.some(word => word.e === currentWord.e)) {
+      errorWords.push(currentWord);
+    }
+  }
+
+  currentWordIndex++;
+
+  if (currentWordIndex >= currentLevelWords.length) {
+    setTimeout(() => {
+      finishWordRound();
+    }, 1000);
+    return;
+  }
+
+  if (userInput !== correctAnswer && isLastWord) {
+    setTimeout(() => {
+      showCurrentWord();
+    }, 1000);
+  } else {
+    showCurrentWord();
+  }
+}
+
+function finishWordRound() {
+  if (isReviewMode) {
+    if (currentLevelCorrect === currentLevelWords.length) {
+      $("tipText").textContent = "🎉 错词全部掌握！即将进入最终BOSS战";
+      setTimeout(() => {
+        startBossGame();
+      }, 1500);
+    } else {
+      $("tipText").textContent = `😢 还有单词未掌握，请重新重练`;
+      setTimeout(() => {
+        loadReviewWords();
+      }, 1500);
+    }
+    return;
+  }
+
+  if (currentLevelCorrect >= 4) {
+    if (!alreadyScoredLevels.includes(currentLevel)) {
+      totalWordScore += currentLevelCorrect;
+      alreadyScoredLevels.push(currentLevel);
+    }
+    $("tipText").textContent = `🎉 本关答对${currentLevelCorrect}个，达标！可以开始游戏`;
+    $("startGameBtn").disabled = false;
+  } else {
+    $("tipText").textContent = `😢 本关仅答对${currentLevelCorrect}个，未达标，请重学本组单词`;
+    setTimeout(() => {
+      loadLevelWords();
+    }, 1500);
+  }
+  updateUI();
+}
+
+$("wordInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitWord();
+});
+
+function loadBestScore() {
+  $("bestKill").textContent = localStorage.getItem("bestKillScore") || 0;
+}
+
+function saveBestScore(killNum) {
+  const oldBest = Number(localStorage.getItem("bestKillScore") || 0);
+  if (killNum > oldBest) {
+    localStorage.setItem("bestKillScore", killNum);
+    loadBestScore();
+  }
+}
+
+let canvas, ctx;
+const canvasW = 400, canvasH = 600;
+let player = { x: 175, y: 500, w: 50, h: 60 };
+let bullets = [], enemies = [], enemyBullets = [], booms = [];
+let stars = [];
+let touchX = canvasW / 2;
+let gameLoop = null;
+let isGameRunning = false;
+let killScore = 0;
+let lastShootTime = 0;
+let gameStartTime = 0;
+let boss = null;
+let bossHitCount = 0;
+const bossMaxHp = 100;
+let bossStartTime = 0;
+
+function initStars() {
+  stars = [];
+  for (let i = 0; i < 80; i++) {
+    stars.push({
+      x: Math.random() * canvasW,
+      y: Math.random() * canvasH,
+      size: Math.random() * 2 + 0.5,
+      speed: Math.random() * 1 + 0.3
+    });
+  }
+}
+
+function drawStars() {
+  ctx.fillStyle = "#ffffff";
+  stars.forEach(star => {
+    star.y += star.speed;
+    if (star.y > canvasH) {
+      star.y = 0;
+      star.x = Math.random() * canvasW;
+    }
+    ctx.globalAlpha = Math.random() * 0.8 + 0.2;
+    ctx.fillRect(star.x, star.y, star.size, star.size);
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawPlayer(x, y, w, h) {
+  ctx.fillStyle = "#00aaff";
+  ctx.beginPath();
+  ctx.moveTo(x + w/2, y);
+  ctx.lineTo(x + w*0.35, y + h*0.4);
+  ctx.lineTo(x + w*0.1, y + h*0.45);
+  ctx.lineTo(x + w*0.3, y + h*0.65);
+  ctx.lineTo(x + w*0.35, y + h*0.9);
+  ctx.lineTo(x + w*0.65, y + h*0.9);
+  ctx.lineTo(x + w*0.7, y + h*0.65);
+  ctx.lineTo(x + w*0.9, y + h*0.45);
+  ctx.lineTo(x + w*0.65, y + h*0.4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#ccf5ff";
+  ctx.beginPath();
+  ctx.ellipse(x + w/2, y + h*0.2, w*0.15, h*0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#333333";
+  ctx.fillRect(x + w*0.4, y + h*0.05, w*0.08, h*0.1);
+  ctx.fillRect(x + w*0.52, y + h*0.05, w*0.08, h*0.1);
+  ctx.fillStyle = "#66d4ff";
+  ctx.fillRect(x + w*0.1, y + h*0.45, w*0.25, h*0.03);
+  ctx.fillRect(x + w*0.65, y + h*0.45, w*0.25, h*0.03);
+}
+
+function drawEnemy(x, y, w, h) {
+  ctx.fillStyle = "#ff4444";
+  ctx.beginPath();
+  ctx.moveTo(x + w/2, y + h);
+  ctx.lineTo(x + w*0.35, y + h*0.6);
+  ctx.lineTo(x + w*0.1, y + h*0.55);
+  ctx.lineTo(x + w*0.3, y + h*0.35);
+  ctx.lineTo(x + w*0.35, y);
+  ctx.lineTo(x + w*0.65, y);
+  ctx.lineTo(x + w*0.7, y + h*0.35);
+  ctx.lineTo(x + w*0.9, y + h*0.55);
+  ctx.lineTo(x + w*0.65, y + h*0.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#333333";
+  ctx.beginPath();
+  ctx.ellipse(x + w/2, y + h*0.8, w*0.15, h*0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#222222";
+  ctx.fillRect(x + w*0.4, y + h*0.85, w*0.08, h*0.1);
+  ctx.fillRect(x + w*0.52, y + h*0.85, w*0.08, h*0.1);
+}
+
+function drawBoss(x, y, w, h) {
+  ctx.fillStyle = "#aa2222";
+  ctx.beginPath();
+  ctx.moveTo(x + w/2, y + h);
+  ctx.lineTo(x + w*0.2, y + h*0.7);
+  ctx.lineTo(x, y + h*0.75);
+  ctx.lineTo(x + w*0.25, y + h*0.3);
+  ctx.lineTo(x + w*0.3, y);
+  ctx.lineTo(x + w*0.7, y);
+  ctx.lineTo(x + w*0.75, y + h*0.3);
+  ctx.lineTo(x + w, y + h*0.75);
+  ctx.lineTo(x + w*0.8, y + h*0.7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#ffaaaa";
+  ctx.beginPath();
+  ctx.ellipse(x + w/2, y + h*0.25, w*0.18, h*0.15, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ff6666";
+  ctx.fillRect(x, y + h*0.75, w*0.3, h*0.05);
+  ctx.fillRect(x + w*0.7, y + h*0.75, w*0.3, h*0.05);
+  const hpBarWidth = w;
+  const hpBarHeight = 8;
+  const hpPercent = (bossMaxHp - bossHitCount) / bossMaxHp;
+  ctx.fillStyle = "#333333";
+  ctx.fillRect(x, y - 20, hpBarWidth, hpBarHeight);
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(x, y - 20, hpBarWidth * hpPercent, hpBarHeight);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "12px Microsoft YaHei";
+  ctx.fillText(`${bossMaxHp - bossHitCount}/${bossMaxHp}`, x + w/2 - 15, y - 25);
+}
+
+function addBoom(x, y, maxRadius = 30) {
+  booms.push({
+    x: x,
+    y: y,
+    radius: 5,
+    maxRadius: maxRadius,
+    alpha: 1,
+    speed: 2
+  });
+}
+
+function drawBooms() {
+  booms.forEach((boom, index) => {
+    const gradient = ctx.createRadialGradient(boom.x, boom.y, 0, boom.x, boom.y, boom.radius);
+    gradient.addColorStop(0, "rgba(255, 255, 0, " + boom.alpha + ")");
+    gradient.addColorStop(0.5, "rgba(255, 100, 0, " + boom.alpha + ")");
+    gradient.addColorStop(1, "rgba(255, 0, 0, " + boom.alpha * 0.3 + ")");
+    
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(boom.x, boom.y, boom.radius, 0, Math.PI * 2);
+    ctx.fill();
+    boom.radius += boom.speed;
+    boom.alpha -= 0.05;
+    if (boom.alpha <= 0) {
+      booms.splice(index, 1);
+    }
+  });
+}
+
+function startGame() {
+  initAudio();
+  $("mainUI").style.display = "none";
+  $("gameCanvas").style.display = "block";
+  
+  canvas = $("gameCanvas");
+  ctx = canvas.getContext("2d");
+  initStars();
+  booms = [];
+  bullets = [];
+  enemies = [];
+  enemyBullets = [];
+  boss = null;
+  isBossMode = false;
+  
+  player = { x: 175, y: 500, w: 50, h: 60 };
+  touchX = player.x + player.w / 2;
+  killScore = 0;
+  isGameRunning = true;
+  lastShootTime = Date.now();
+  gameStartTime = Date.now();
+  gameLoop = setInterval(renderGame, 16);
+  spawnEnemy();
+  if (currentLevel >= 2) {
+    startEnemyShoot();
+  }
+}
+
+function startBossGame() {
+  initAudio();
+  $("mainUI").style.display = "none";
+  $("gameCanvas").style.display = "block";
+  
+  canvas = $("gameCanvas");
+  ctx = canvas.getContext("2d");
+  initStars();
+  booms = [];
+  bullets = [];
+  enemies = [];
+  enemyBullets = [];
+  isBossMode = true;
+  bossHitCount = 0;
+  
+  boss = {
+    x: canvasW / 2 - 75,
+    y: 50,
+    w: 150,
+    h: 120,
+    speed: 2,
+    moveDirection: 1,
+    lastShootTime: Date.now(),
+    shootInterval: 800
+  };
+  
+  player = { x: 175, y: 500, w: 50, h: 60 };
+  touchX = player.x + player.w / 2;
+  killScore = 0;
+  isGameRunning = true;
+  lastShootTime = Date.now();
+  bossStartTime = Date.now();
+  gameLoop = setInterval(renderBossGame, 16);
+}
+
+function spawnEnemy() {
+  if (!isGameRunning || isBossMode) return;
+  const maxEnemyCount = 5 + currentLevel;
+  if (enemies.length < maxEnemyCount) {
+    enemies.push({
+      x: Math.random() * (canvasW - 45),
+      y: -60,
+      w: 45,
+      h: 55,
+      speed: 1.2 + (currentLevel * 0.25)
+    });
+  }
+  const spawnInterval = Math.max(300, 700 - (currentLevel * 40));
+  setTimeout(spawnEnemy, spawnInterval);
+}
+
+function startEnemyShoot() {
+  if (!isGameRunning || isBossMode) return;
+  enemies.forEach(enemy => {
+    const shootRate = Math.max(1500, 2500 - (currentLevel * 200));
+    if (Math.random() * 10000 < shootRate) {
+      enemyBullets.push({
+        x: enemy.x + enemy.w / 2 - 4,
+        y: enemy.y + enemy.h,
+        w: 8,
+        h: 18,
+        speed: 3 + (currentLevel * 0.3)
+      });
+    }
+  });
+  setTimeout(startEnemyShoot, 300);
+}
+
+function renderGame() {
+  if (!isGameRunning || isBossMode) return;
+  ctx.clearRect(0, 0, canvasW, canvasH);
+  drawStars();
+  drawPlayer(player.x, player.y, player.w, player.h);
+  
+  player.x = touchX - player.w / 2;
+  if (player.x < 0) player.x = 0;
+  if (player.x > canvasW - player.w) player.x = canvasW - player.w;
+
+  enemies.forEach((enemy, index) => {
+    enemy.y += enemy.speed;
+    drawEnemy(enemy.x, enemy.y, enemy.w, enemy.h);
+    if (enemy.y > canvasH) enemies.splice(index, 1);
+  });
+
+  const now = Date.now();
+  if (now - lastShootTime > 150) {
+    bullets.push({
+      x: player.x + player.w / 2 - 3,
+      y: player.y - 10,
+      w: 6,
+      h: 15,
+      speed: 10
+    });
+    playShootSound();
+    lastShootTime = now;
+  }
+
+  ctx.fillStyle = "#ffff00";
+  bullets.forEach((bullet, index) => {
+    bullet.y -= bullet.speed;
+    ctx.fillRect(bullet.x, bullet.y, bullet.w, bullet.h);
+    if (bullet.y < 0) bullets.splice(index, 1);
+  });
+
+  ctx.fillStyle = "#ff4444";
+  enemyBullets.forEach((bullet, index) => {
+    bullet.y += bullet.speed;
+    ctx.fillRect(bullet.x, bullet.y, bullet.w, bullet.h);
+    if (bullet.y > canvasH) enemyBullets.splice(index, 1);
+  });
+
+  enemies.forEach((enemy, enemyIdx) => {
+    bullets.forEach((bullet, bulletIdx) => {
+      if (
+        bullet.x > enemy.x &&
+        bullet.x < enemy.x + enemy.w &&
+        bullet.y > enemy.y &&
+        bullet.y < enemy.y + enemy.h
+      ) {
+        addBoom(enemy.x + enemy.w/2, enemy.y + enemy.h/2);
+        playBoomSound();
+        enemies.splice(enemyIdx, 1);
+        bullets.splice(bulletIdx, 1);
+        killScore++;
+      }
+    });
+  });
+
+  enemyBullets.forEach((bullet, index) => {
+    if (
+      bullet.x > player.x &&
+      bullet.x < player.x + player.w &&
+      bullet.y > player.y &&
+      bullet.y < player.y + player.h
+    ) {
+      gameOver();
+    }
+  });
+
+  enemies.forEach((enemy) => {
+    if (
+      enemy.x + enemy.w > player.x &&
+      enemy.x < player.x + player.w &&
+      enemy.y + enemy.h > player.y &&
+      enemy.y < player.y + player.h
+    ) {
+      gameOver();
+    }
+  });
+
+  drawBooms();
+  ctx.fillStyle = "#fff";
+  ctx.font = "16px Microsoft YaHei";
+  ctx.fillText(`击落敌机：${killScore} 架`, 10, 30);
+  ctx.fillText(`关卡：${currentLevel}/10`, 10, 55);
+  const leftTime = Math.ceil((60000 - (Date.now() - gameStartTime)) / 1000);
+  ctx.fillText(`剩余时间：${leftTime}s`, canvasW - 120, 30);
+  if (Date.now() - gameStartTime > 60000) {
+    gameOver(false);
+  }
+}
+
+function renderBossGame() {
+  if (!isGameRunning || !isBossMode) return;
+  ctx.clearRect(0, 0, canvasW, canvasH);
+  drawStars();
+  drawPlayer(player.x, player.y, player.w, player.h);
+  drawBoss(boss.x, boss.y, boss.w, boss.h);
+  
+  player.x = touchX - player.w / 2;
+  if (player.x < 0) player.x = 0;
+  if (player.x > canvasW - player.w) player.x = canvasW - player.w;
+
+  boss.x += boss.speed * boss.moveDirection;
+  if (boss.x <= 0 || boss.x + boss.w >= canvasW) {
+    boss.moveDirection *= -1;
+  }
+
+  const now = Date.now();
+  if (now - lastShootTime > 150) {
+    bullets.push({
+      x: player.x + player.w / 2 - 3,
+      y: player.y - 10,
+      w: 6,
+      h: 15,
+      speed: 10
+    });
+    playShootSound();
+    lastShootTime = now;
+  }
+
+  ctx.fillStyle = "#ffff00";
+  bullets.forEach((bullet, index) => {
+    bullet.y -= bullet.speed;
+    ctx.fillRect(bullet.x, bullet.y, bullet.w, bullet.h);
+    if (bullet.y < 0) bullets.splice(index, 1);
+  });
+
+  if (now - boss.lastShootTime > boss.shootInterval) {
+    enemyBullets.push({
+      x: boss.x + boss.w * 0.3 - 4,
+      y: boss.y + boss.h,
+      w: 10,
+      h: 22,
+      speed: 4.5
+    });
+    enemyBullets.push({
+      x: boss.x + boss.w * 0.7 - 4,
+      y: boss.y + boss.h,
+      w: 10,
+      h: 22,
+      speed: 4.5
+    });
+    boss.lastShootTime = now;
+    if (bossMaxHp - bossHitCount < 30) {
+      boss.shootInterval = 400;
+    }
+  }
+
+  ctx.fillStyle = "#ff2222";
+  enemyBullets.forEach((bullet, index) => {
+    bullet.y += bullet.speed;
+    ctx.fillRect(bullet.x, bullet.y, bullet.w, bullet.h);
+    if (bullet.y > canvasH) enemyBullets.splice(index, 1);
+  });
+
+  bullets.forEach((bullet, bulletIdx) => {
+    if (
+      bullet.x > boss.x &&
+      bullet.x < boss.x + boss.w &&
+      bullet.y > boss.y &&
+      bullet.y < boss.y + boss.h
+    ) {
+      bossHitCount++;
+      bullets.splice(bulletIdx, 1);
+      addBoom(bullet.x, bullet.y, 15);
+      playBoomSound();
+      if (bossHitCount >= bossMaxHp) {
+        bossGameWin();
+      }
+    }
+  });
+
+  enemyBullets.forEach((bullet, index) => {
+    if (
+      bullet.x > player.x &&
+      bullet.x < player.x + player.w &&
+      bullet.y > player.y &&
+      bullet.y < player.y + player.h
+    ) {
+      bossGameOver();
+    }
+  });
+
+  if (
+    boss.x + boss.w > player.x &&
+    boss.x < player.x + player.w &&
+    boss.y + boss.h > player.y &&
+    boss.y < player.y + player.h
+  ) {
+    bossGameOver();
+  }
+
+  drawBooms();
+  ctx.fillStyle = "#fff";
+  ctx.font = "16px Microsoft YaHei";
+  ctx.fillText(`BOSS战`, 10, 30);
+  ctx.fillText(`错词数量：${errorWords.length}个`, 10, 55);
+  ctx.fillText(`命中次数：${bossHitCount}/${bossMaxHp}`, 10, 80);
+}
+
+$("gameCanvas").addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  const rect = $("gameCanvas").getBoundingClientRect();
+  touchX = e.touches[0].clientX - rect.left;
+  initAudio();
+});
+
+function gameOver(isDead = true) {
+  if (!isGameRunning) return;
+  isGameRunning = false;
+  clearInterval(gameLoop);
+  playOverSound();
+
+  totalRoundKill += killScore;
+  saveBestScore(totalRoundKill);
+  updateUI();
+  
+  let alertText = isDead 
+    ? `💥 你被敌机击中！\n本次击落：${killScore} 架敌机\n本局累计击落：${totalRoundKill} 架`
+    : `⏰ 本关时间到！\n本次击落：${killScore} 架敌机\n本局累计击落：${totalRoundKill} 架`;
+  alert(alertText);
+  
+  if (currentLevel >= 10) {
+    if (errorWords.length > 0) {
+      loadReviewWords();
+    } else {
+      alert(`🎉 所有单词全部掌握！即将进入最终BOSS战`);
+      setTimeout(() => {
+        startBossGame();
+      }, 1000);
+    }
+  } 
+  else {
+    currentLevel++;
+    loadLevelWords();
+  }
+  
+  $("gameCanvas").style.display = "none";
+  $("mainUI").style.display = "block";
+}
+
+function bossGameOver() {
+  if (!isGameRunning) return;
+  isGameRunning = false;
+  isBossMode = false;
+  clearInterval(gameLoop);
+  playOverSound();
+  
+  alert(`遗憾没有通过BOSS关，被敌人击落！
+单词总分：${totalWordScore}
+累计击落敌机：${totalRoundKill} 架`);
+  
+  const isContinue = confirm("是否开始新一轮游戏？");
+  if (isContinue) {
+    initGameRound();
+  }
+  
+  $("gameCanvas").style.display = "none";
+  $("mainUI").style.display = "block";
+}
+
+function bossGameWin() {
+  if (!isGameRunning) return;
+  isGameRunning = false;
+  isBossMode = false;
+  clearInterval(gameLoop);
+  const useTime = Math.round((Date.now() - bossStartTime) / 1000);
+  addBoom(boss.x + boss.w/2, boss.y + boss.h/2, 100);
+  playBoomSound();
+  
+  setTimeout(() => {
+    alert(`恭喜通过BOSS关！
+BOSS关用时：${useTime} 秒
+单词总分：${totalWordScore}
+十关总共击落敌机：${totalRoundKill} 架`);
+    
+    const isContinue = confirm("是否开始新一轮游戏？");
+    if (isContinue) {
+      initGameRound();
+    }
+    
+    $("gameCanvas").style.display = "none";
+    $("mainUI").style.display = "block";
+  }, 500);
+}
+
+window.onload = () => {
+  const savedAudioState = localStorage.getItem("audioOn");
+  if (savedAudioState !== null) {
+    isAudioOn = savedAudioState === "true";
+  }
+  const btn = $("audioBtn");
+  if (isAudioOn) {
+    btn.textContent = "🔊 音效：已开启";
+    btn.classList.remove("off");
+  } else {
+    btn.textContent = "🔇 音效：已关闭";
+    btn.classList.add("off");
+  }
+  initGameRound();
+  loadBestScore();
+  document.body.addEventListener("click", initAudio, { once: true });
+};
+</script>
+</body>
+</html>
